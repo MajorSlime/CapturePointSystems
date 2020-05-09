@@ -1,0 +1,12 @@
+#library "DFLTMAPS"
+#include "zcommon.acs"
+#import "CPLIB.acs"
+
+
+
+script 901 OPEN
+{
+	delay(35);
+	
+	addHUBPortal("MapImage","MapLump","Warehouse Warfare", "MapNameImage");
+}

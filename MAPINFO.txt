@@ -1,0 +1,8 @@
+// Capture Point MAPINFO
+
+map HUB_DOOM "Capture Point System HUB"
+{
+	nointermission
+	sky1 = "SKY1"
+	music = "CIVWAR"
+}

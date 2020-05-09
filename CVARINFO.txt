@@ -1,0 +1,3 @@
+user int CPS_HUD_3DPOINTSTATUS = 1;
+user int CPS_HUD_POINTSTATUS = 1;
+user int CPS_HUD_POINTICONS = 1;

@@ -1,0 +1,49 @@
+CPBlue
+{
+	#000033 #3333FF
+}
+
+CPHiBlue
+{
+	#141466 #9999FF
+}
+
+CPMedBlue
+{
+	#292966 #C2C2FF
+}
+
+CPLowBlue
+{
+	#474766 #E0E0FF
+}
+
+CPGray
+{
+	#1A1A1A #CCCCCC
+}
+
+CPLowRed
+{
+	#664747	#FFE0E0
+}
+
+CPMedRed
+{
+	#662929 #FFC2C2
+}
+
+CPHiRed
+{
+	#661414 #FF9999
+}
+
+CPRed
+{
+	#330000 #FF3333
+}
+
+CPOrange
+{
+	#331F00 #FFAD33
+}

@@ -1,0 +1,1231 @@
+#library "CPLIB"
+#include "zcommon.acs"
+
+// Definitions
+#libdefine VEND_SRVR_TIMELIMIT 0
+#libdefine VEND_SRVR_TIMELIMIT_NONE 0
+
+#libdefine VEND_CLNT_POINTSTATUS 1
+#libdefine VEND_CLNT_POINTSTATUS_NONE 10
+#libdefine VEND_CLNT_POINTSTATUS_TEXT 1
+#libdefine VEND_CLNT_POINTSTATUS_ICON 2
+
+#libdefine VEND_CLNT_3DPOINTSTATUS 2
+#libdefine VEND_CLNT_3DPOINTSTATUS_NONE 10
+#libdefine VEND_CLNT_3DPOINTSTATUS_TEXT 1
+#libdefine VEND_CLNT_3DPOINTSTATUS_ICON 2
+
+#libdefine VEND_CLNT_POINTICONS 3
+#libdefine VEND_CLNT_POINTICONS_OFF 10
+#libdefine VEND_CLNT_POINTICONS_ON 1
+
+// Capture Points Status
+int CPStatus[99];
+/*
+    0 = Blue Base
+    1 = Blue Side
+    2 = Blue Side
+    3 = Mid Point
+    4 = Red Side
+    5 = Red Side
+    6 = Red Base
+*/
+int CPFakeStatus[99];
+int CPWho[99]; // Status about who's on what point
+int CPOwn[99]; // Status about who actually own the point
+/*
+    0 = No one
+    1 = Blue Team
+    2 = Red Team
+*/
+int CPLoc[99][5]; // Info about point location
+/*
+    slot1 = x
+    slot2 = y
+    slot3 = radius
+    slot4 = z
+    slot5 = zHeight
+*/
+int CPUsed = 0; // How many points are defined.
+
+// Defines the required points for taking other points. Up to 5 points can be required.
+int CPReqRed[99][5]; // Red Version
+int CPReqBlue[99][5]; // Blue Version
+
+int CPChange[99][3][25][5]; // Defines the changes that happen when ownership of a point changes.
+/*
+    [p][team][which][tag, side(f/b), side(u/m/l), flat(y/n)]
+*/
+
+int CPHUBPortals[99][5]; // Only used for HUB maps; holds information for the map selector system.
+/*
+	[portalID][imageTag, imageName, lumpName, mapName, nameTag]
+*/
+int CPHUBPortalsUsed = 0;
+
+bool isHUB = false;
+int maxPortals = 0;
+
+// Player Team Status
+int PTStatus[32];
+
+// Player Map Vote STatus
+int PVStatus[32];
+int PortalVoteListing[99];
+
+bool Alive[32];
+
+int timeLeft = 0;
+
+
+function bool setHUBVendor (int vendorType, int vendorSubType, int lineID)
+{
+	SetLineSpecial(lineID, ACS_ExecuteAlways, 807, 0, vendorType, vendorSubType, lineID);
+	//SetLineActivation(lineID, SPAC_Use);
+	return true;
+}
+
+script 791 (int team, int tag, int secondaryTag)
+{
+    int ttm = team;
+    bool done = false;
+    while(!done)
+    {
+        if(team == -1) ttm = random(0,1);
+        else done = true;
+        int opTeam;
+        if(ttm == 0) opTeam = 1;
+        else opTeam = 0;
+    
+        if( (GetTeamProperty(ttm, TPROP_NumPlayers) - GetTeamProperty(opTeam, TPROP_NumPlayers)) > 2 )
+        {
+            if( team > -1 ) hudmessage(s:"This team has too many players. Please select the other team."; HUDMSG_PLAIN, 9, 0, 0.5, 0.5, 1.5);
+        }
+        else
+        {
+            Player_SetTeam(ttm);
+            PTStatus[PlayerNumber()] = PlayerTeam();
+            
+            if( team > -1 ) Teleport(tag, 0, 0);
+            else
+            {
+                if(ttm == 0) Teleport(tag, 0, 0);
+                else Teleport(secondaryTag, 0, 0);
+            }
+            
+            done = true;
+        }
+    }
+}
+
+script 795 ENTER
+{
+    delay(10);
+    
+    Thing_ChangeTID(0, 1000 + PlayerNumber());
+    Alive[PlayerNumber()] = true;
+    
+    PTStatus[PlayerNumber()] = PlayerTeam();
+	
+	if( GetCVar("CPS_HUD_POINTSTATUS") == 0 ) ConsoleCommand("set CPS_HUD_POINTSTATUS 1");
+	if( GetCVar("CPS_HUD_3DPOINTSTATUS") == 0 ) ConsoleCommand("set CPS_HUD_3DPOINTSTATUS 1");
+	if( GetCVar("CPS_HUD_POINTICONS") == 0 ) ConsoleCommand("set CPS_HUD_POINTICONS 1");
+}
+
+script 796 RESPAWN
+{
+    Thing_ChangeTID(0, 1000 + PlayerNumber());
+    PTStatus[PlayerNumber()] = PlayerTeam();
+    Alive[PlayerNumber()] = true;
+}
+
+script 797 DEATH
+{
+    Thing_ChangeTID(1000 + PlayerNumber(), 0);
+    Alive[PlayerNumber()] = false;
+}
+
+script 805 (int gone) DISCONNECT
+{
+	Alive[gone] = false;
+	PVStatus[gone] = -1;
+}
+
+script 798 OPEN
+{
+    delay(35);
+    int i = 0;
+	if( isHUB )
+	{
+		ConsoleCommand("set pointlimit 0");
+		terminate;
+	}
+    if( GetCVar("TimeLimit") == 0 ) ConsoleCommand("set pointlimit 1");
+    else
+    {
+        ConsoleCommand(StrParam(s:"set pointlimit ",i:(CPUsed*GetCVar("TimeLimit")*30)));
+    }
+}
+
+script 800 RESPAWN
+{
+	if( isHUB )
+	{
+		ClearInventory();
+	}
+}
+
+script 801 ENTER
+{
+    if( isHUB )
+	{
+		ClearInventory();
+	}
+}
+
+script 802 OPEN
+{
+    int i = 0;
+    
+    while(true)
+    {
+        for(i = 0; i < CPUsed; i++)
+        {
+            if( CPFakeStatus[i] < CPStatus[i] ) CPFakeStatus[i]++;
+            if( CPFakeStatus[i] > CPStatus[i] ) CPFakeStatus[i]--;
+        }
+        delay(1);
+    }
+}
+
+// Handles Voting
+script 804 OPEN
+{
+	int i = 0;
+	
+	for(i = 0; i < 32; i++)
+	{
+		PVStatus[i] = -1;
+	}
+	
+	int countdown = 3;
+	bool stillgood = false;
+	
+	delay(35);
+	
+	while(true)
+	{
+		if(isHUB)
+		{
+			int PlayersNeeded = (PlayerCount() * 2 / 3);
+			if (PlayersNeeded < 1) PlayersNeeded = 1;
+			
+			for(i = 0; i < CPHUBPortalsUsed; i++)
+			{
+				PortalVoteListing[i] = 0;
+			}
+			
+			for(i = 0; i < 32; i++)
+			{
+				if( (PVStatus[i] > -1) && (PVStatus[i] < CPHUBPortalsUsed) )
+				{
+					PortalVoteListing[PVStatus[i]] += 1;
+				}
+			}
+			
+			int p = 0;
+			
+			for(i = 0; i < CPHUBPortalsUsed; i++)
+			{
+				if( PortalVoteListing[i] > 0 )
+				{
+					p++;
+					hudmessage(s:CPHUBPortals[i][3], s:": ", i:PortalVoteListing[i], s:"/", i:PlayersNeeded; HUDMSG_PLAIN, 30+p, 0, 0.1, 0.1 + (p*0.02), 0.0);
+				}
+				if( PortalVoteListing[i] >= PlayersNeeded )
+				{
+					stillgood = true;
+					if( countdown > 0 ) print(s:"Changing to ", s:CPHUBPortals[i][3], s:" in ", i:countdown, s:" seconds.");
+					else
+					{
+						ChangeLevel(CPHUBPortals[i][2], 0, CHANGELEVEL_NOMONSTERS, -1);
+					}
+					countdown--;
+				}
+			}
+			if(!stillgood && (countdown < 3))
+			{
+				countdown = 3;
+				print(s:"");
+			}
+		}
+		
+		delay(35);
+	}
+}
+
+script 806 (int mapNum)
+{
+	HudMessage(s:CPHUBPortals[mapNum][3]; HUDMSG_FADEINOUT, 7, 0, 1.5, 0.5, 2.0, 0.5, 0.5);
+	PVStatus[PlayerNumber()] = mapNum;
+}
+
+script 807 (int vendorType, int vendorSubType, int lineID)
+{
+	//bool good = false;
+	if( vendorType == VEND_SRVR_TIMELIMIT )
+	{
+		if( vendorSubType == VEND_SRVR_TIMELIMIT_NONE ) ConsoleCommand("set timelimit 0");
+		else if( vendorSubType > 0 ) ConsoleCommand(StrParam(s:"set timelimit ",i:vendorSubType));
+		//good = true;
+		HudMessage(s:"Timelimit Set: ", i:vendorSubType, s:" Minutes"; HUDMSG_FADEINOUT, 7, 0, 1.5, 0.5, 2.0, 0.2, 0.5);
+	}
+	else if( vendorType == VEND_CLNT_POINTSTATUS )
+	{
+		ConsoleCommand(StrParam(s:"set CPS_HUD_POINTSTATUS ",i:vendorSubType));
+		//good = true;
+		if( vendorSubType == VEND_CLNT_POINTSTATUS_NONE )
+		{
+			HudMessage(s:"On-Point Info Set: None"; HUDMSG_FADEINOUT, 7, 0, 1.5, 0.5, 2.0, 0.2, 0.5);
+		}
+		else if( vendorSubType == VEND_CLNT_POINTSTATUS_TEXT )
+		{
+			HudMessage(s:"On-Point Info Set: Percentage"; HUDMSG_FADEINOUT, 7, 0, 1.5, 0.5, 2.0, 0.2, 0.5);
+		}
+		else if( vendorSubType == VEND_CLNT_POINTSTATUS_ICON )
+		{
+			HudMessage(s:"On-Point Info Set: Icon"; HUDMSG_FADEINOUT, 7, 0, 1.5, 0.5, 2.0, 0.2, 0.5);
+		}
+	}
+	else if( vendorType == VEND_CLNT_3DPOINTSTATUS )
+	{
+		ConsoleCommand(StrParam(s:"set CPS_HUD_3DPOINTSTATUS ",i:vendorSubType));
+		//good = true;
+		if( vendorSubType == VEND_CLNT_3DPOINTSTATUS_NONE )
+		{
+			HudMessage(s:"Floating Point Info Set: None"; HUDMSG_FADEINOUT, 7, 0, 1.5, 0.5, 2.0, 0.2, 0.5);
+		}
+		else if( vendorSubType == VEND_CLNT_3DPOINTSTATUS_TEXT )
+		{
+			HudMessage(s:"Floating Point Info Set: Percentage"; HUDMSG_FADEINOUT, 7, 0, 1.5, 0.5, 2.0, 0.2, 0.5);
+		}
+		else if( vendorSubType == VEND_CLNT_3DPOINTSTATUS_ICON )
+		{
+			HudMessage(s:"Floating Point Info Set: Icon"; HUDMSG_FADEINOUT, 7, 0, 1.5, 0.5, 2.0, 0.2, 0.5);
+		}
+	}
+	else if( vendorType == VEND_CLNT_POINTICONS )
+	{
+		ConsoleCommand(StrParam(s:"set CPS_HUD_POINTICONS ",i:vendorSubType));
+		//good = true;
+		if( vendorSubType == VEND_CLNT_POINTICONS_OFF )
+		{
+			HudMessage(s:"Global Point Info Set: Off"; HUDMSG_FADEINOUT, 7, 0, 1.5, 0.5, 2.0, 0.2, 0.5);
+		}
+		else if( vendorSubType == VEND_CLNT_POINTICONS_ON )
+		{
+			HudMessage(s:"Global Point Info Set: On"; HUDMSG_FADEINOUT, 7, 0, 1.5, 0.5, 2.0, 0.2, 0.5);
+		}
+	}
+	
+	/*
+	if(good)
+	{
+		SetLineTexture(lineID, SIDE_FRONT, TEXTURE_MIDDLE, "CHEKMARK");
+		delay(20);
+		SetLineTexture(lineID, SIDE_FRONT, TEXTURE_MIDDLE, "-");
+	}
+	*/
+}
+
+function bool defineHUBPortal (int imageTag, int nameTag, bool doScroll)
+{
+	isHUB = true;
+	CPHUBPortals[maxPortals][0] = imageTag;
+	CPHUBPortals[maxPortals][4] = nameTag;
+	if( doScroll )
+	{
+		Scroll_Wall(nameTag, 1.0, 0.0, 0, 2);
+	}
+	maxPortals += 1;
+	return true;
+}
+
+function bool defineCapturePoint (int x, int y, int z, int radius, int zHeight, int team)
+{
+    int i = 0;
+    int n = 0;
+    
+    CPLoc[CPUsed][0] = x;
+    CPLoc[CPUsed][1] = y;
+    CPLoc[CPUsed][2] = radius;
+    CPLoc[CPUsed][3] = z;
+    CPLoc[CPUsed][4] = zHeight;
+    
+    CPOwn[CPUsed] = team;
+    
+    CPWho[CPUsed] = 0;
+    
+    for(i = 0; i < 5; i++)
+    {
+        CPReqBlue[CPUsed][i] = -1;
+        CPReqRed[CPUsed][i] = -1;
+    }
+    
+    for(i = 0; i < 3; i++)
+    {
+        for(n = 0; n < 25; n++)
+        {
+            CPChange[CPUsed][i][n][0] = -1;
+            CPChange[CPUsed][i][n][1] = SIDE_FRONT;
+            CPChange[CPUsed][i][n][2] = TEXTURE_MIDDLE;
+            CPChange[CPUsed][i][n][3] = -1;
+            CPChange[CPUsed][i][n][4] = 0;
+        }
+    }
+    
+    if(team == 1) CPStatus[CPUsed] = 100;
+    if(team == 2) CPStatus[CPUsed] = -100;
+	
+	if( ThingCount(T_NONE, 4000 + CPUsed) > 0 )
+	{
+	}
+	else
+	{
+		Spawn("MapSpot", x * 65536, y * 65536, (z + 192) * 65536, 4000 + CPUsed, 0);
+	}
+    
+    CPUsed += 1;
+    
+    return true;
+}
+
+function bool defineChange (int point, int team, int tag, int side, int location, str texture, bool flat)
+{
+    int i = 0;
+    for(i = 0; i < 25; i++)
+    {
+        if(CPChange[point][team][i][0] == -1)
+        {
+            CPChange[point][team][i][0] = tag;
+            CPChange[point][team][i][1] = side;
+            CPChange[point][team][i][2] = location;
+            CPChange[point][team][i][3] = texture;
+            CPChange[point][team][i][4] = flat;
+            return true;
+        }
+    }
+    return false;
+}
+
+function bool addHUBPortal (str imageName, str lumpName, str mapName, str nameImageName)
+{
+	if( ( (CPHUBPortalsUsed + 1) > maxPortals ) || !isHUB )
+	{
+		return false;
+	}
+	
+	CPHUBPortals[CPHUBPortalsUsed][1] = imageName;
+	CPHUBPortals[CPHUBPortalsUsed][2] = lumpName;
+	CPHUBPortals[CPHUBPortalsUsed][3] = mapName;
+	
+	SetLineSpecial(CPHUBPortals[CPHUBPortalsUsed][0], ACS_Execute, 806, 0, CPHUBPortalsUsed);
+	SetLineTexture(CPHUBPortals[CPHUBPortalsUsed][0], SIDE_FRONT, TEXTURE_MIDDLE, imageName);
+	SetLineTexture(CPHUBPortals[CPHUBPortalsUsed][0], SIDE_BACK, TEXTURE_MIDDLE, imageName);
+	SetLineTexture(CPHUBPortals[CPHUBPortalsUsed][4], SIDE_FRONT, TEXTURE_MIDDLE, nameImageName);
+	
+	Door_Open(CPHUBPortals[CPHUBPortalsUsed][0], 70, 0);
+	
+	CPHUBPortalsUsed += 1;
+	
+	return true;
+}
+
+function bool defineConnection (int originalPoint, int requiredPoint, int team)
+{
+    int i = 0;
+    if(team == 1)
+    {
+        for(i = 0; i < 5; i++)
+        {
+            if(CPReqBlue[originalPoint][i] == -1)
+            {
+                CPReqBlue[originalPoint][i] = requiredPoint;
+                return true;
+            }
+        }
+        return false;
+    }
+    if(team == 2)
+    {
+        for(i = 0; i < 5; i++)
+        {
+            if(CPReqRed[originalPoint][i] == -1)
+            {
+                CPReqRed[originalPoint][i] = requiredPoint;
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
+// HUD Display Script - CP Status
+script 793 ENTER
+{
+    int i = 0;
+    int p = 0;
+    bool checkPassed = true;
+    
+    delay(35);
+	
+	if(isHUB)
+	{
+		
+	}
+	else
+	{
+    
+    while(Alive[PlayerNumber()])
+    {
+			SetFont("CPFNTNEW");
+            for(p = 0; p < CPUsed; p++)
+            {
+                if(InAreaHeight(0, CPLoc[p][0] - CPLoc[p][2], CPLoc[p][0] + CPLoc[p][2], CPLoc[p][1] - CPLoc[p][2], CPLoc[p][1] + CPLoc[p][2], CPLoc[p][3], CPLoc[p][3] + CPLoc[p][4]))
+                {
+                    checkPassed = true;
+                    for(i = 0; i < 5; i++)
+                    {
+						if(PlayerTeam() == 0)
+						{
+							if(!(CPReqBlue[p][i] == -1))
+							{
+								if(!(CPOwn[CPReqBlue[p][i]] == 1)) checkPassed = false;
+							}
+						}
+						else if(PlayerTeam() == 1)
+						{
+							if(!(CPReqRed[p][i] == -1))
+							{
+								if(!(CPOwn[CPReqRed[p][i]] == 2)) checkPassed = false;
+							}
+						}
+						else checkPassed = false;
+                    }
+                    if(checkPassed)
+                    {
+						str color;
+						str icon;
+						if(CPOwn[p] == 0)
+						{
+							if(CPFakeStatus[p] == -100) { color = "CPRed"; icon = "I"; }
+							else if( (CPFakeStatus[p] > -100) && (CPFakeStatus[p] < -66) ) { color = "CPHiRed"; icon = "I"; }
+							else if( (CPFakeStatus[p] > -67) && (CPFakeStatus[p] < -33) ) { color = "CPMedRed"; icon = "I"; }
+							else if( (CPFakeStatus[p] > -34) && (CPFakeStatus[p] < 0) ) { color = "CPLowRed"; icon = "I"; }
+							else if(CPFakeStatus[p] == 0) { color = "CPGray"; icon = "I"; }
+							else if( (CPFakeStatus[p] < 34) && (CPFakeStatus[p] > 0) ) { color = "CPLowBlue"; icon = "I"; }
+							else if( (CPFakeStatus[p] < 67) && (CPFakeStatus[p] > 33) ) { color = "CPMedBlue"; icon = "I"; }
+							else if( (CPFakeStatus[p] < 100) && (CPFakeStatus[p] > 66) ) { color = "CPHiBlue"; icon = "I"; }
+							else if(CPFakeStatus[p] == 100) { color = "CPBlue"; icon = "I"; }
+						}
+						else if(CPOwn[p] == 1)
+						{
+							if(PlayerTeam() == 0)
+							{
+								if(CPWho[p] == 2) { color = "CPOrange"; icon = "I"; }
+								else if( (CPFakeStatus[p] < 34) && (CPFakeStatus[p] > 0) ) { color = "CPLowBlue"; icon = "I"; }
+								else if( (CPFakeStatus[p] < 67) && (CPFakeStatus[p] > 33) ) { color = "CPMedBlue"; icon = "I"; }
+								else if( (CPFakeStatus[p] < 100) && (CPFakeStatus[p] > 66) ) { color = "CPHiBlue"; icon = "I"; }
+								else if(CPFakeStatus[p] == 100) { color = "CPBlue"; icon = "I"; }
+							}
+							else if(PlayerTeam() == 1)
+							{
+								if( (CPFakeStatus[p] < 34) && (CPFakeStatus[p] > 0) ) { color = "CPLowBlue"; icon = "I"; }
+								else if( (CPFakeStatus[p] < 67) && (CPFakeStatus[p] > 33) ) { color = "CPMedBlue"; icon = "I"; }
+								else if( (CPFakeStatus[p] < 100) && (CPFakeStatus[p] > 66) ) { color = "CPHiBlue"; icon = "I"; }
+								else if(CPFakeStatus[p] == 100) { color = "CPBlue"; icon = "I"; }
+							}
+						}
+						else if(CPOwn[p] == 2)
+						{
+							if(PlayerTeam() == 1)
+							{
+								if(CPWho[p] == 1) { color = "CPOrange"; icon = "I"; }
+								else if( (CPFakeStatus[p] > -34) && (CPFakeStatus[p] < 0) ) { color = "CPLowRed"; icon = "I"; }
+								else if( (CPFakeStatus[p] > -67) && (CPFakeStatus[p] < -33) ) { color = "CPMedRed"; icon = "I"; }
+								else if( (CPFakeStatus[p] > -100) && (CPFakeStatus[p] < -66) ) { color = "CPHiRed"; icon = "I"; }
+								else if(CPFakeStatus[p] == -100) { color = "CPRed"; icon = "I"; }
+							}
+							else if(PlayerTeam() == 0)
+							{
+								if( (CPFakeStatus[p] > -34) && (CPFakeStatus[p] < 0) ) { color = "CPLowRed"; icon = "I"; }
+								else if( (CPFakeStatus[p] > -67) && (CPFakeStatus[p] < -33) ) { color = "CPMedRed"; icon = "I"; }
+								else if( (CPFakeStatus[p] > -100) && (CPFakeStatus[p] < -66) ) { color = "CPHiRed"; icon = "I"; }
+								else if(CPFakeStatus[p] == -100) { color = "CPRed"; icon = "I"; }
+							}
+						}
+						
+						if( GetCVar("CPS_HUD_POINTSTATUS") == 1 )
+						{
+							hudmessage(i:abs(CPFakeStatus[p]), s:"%"; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 18, color, 0.5, 0.6, 0.2);
+						}
+						else if( GetCVar("CPS_HUD_POINTSTATUS") == 2 )
+						{
+							SetFont("OBJECTFONT");
+							hudmessage(s:"I"; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 18, color, 0.5, 0.6, 0.2);
+						}
+                    }
+                    else hudmessage(s:"You do not own the required areas to capture this."; HUDMSG_PLAIN, 18, CR_ORANGE, 0.5, 0.6, 0.2);
+                }
+            }
+			
+		SetFont("SMALLFONT");
+			
+        delay(3);
+    }
+	
+	}
+}
+
+// HUD Display Script - Goals
+script 794 ENTER
+{
+    int i = 0;
+    int p = 0;
+    bool checkPassed = false;
+    
+    delay(35);
+	
+	if(isHUB) terminate;
+    
+    while(Alive[PlayerNumber()])
+    {
+        
+        if(PlayerTeam() == 0)
+        {
+            for(p = 0; p < CPUsed; p++)
+            {
+                if(InAreaHeight(0, CPLoc[p][0] - CPLoc[p][2], CPLoc[p][0] + CPLoc[p][2], CPLoc[p][1] - CPLoc[p][2], CPLoc[p][1] + CPLoc[p][2], CPLoc[p][3], CPLoc[p][3] + CPLoc[p][4]))
+                {
+					hudmessage(s:""; HUDMSG_PLAIN, 30 + p, CR_GRAY, 0.5, 0.6, 0);
+                }
+                else
+                {
+                    checkPassed = true;
+                    for(i = 0; i < 5; i++)
+                    {
+                        if(!(CPReqBlue[p][i] == -1))
+                        {
+                            if(!(CPOwn[CPReqBlue[p][i]] == 1)) checkPassed = false;
+                        }
+                    }
+                    if(checkPassed)
+                    {
+                        if( (CPOwn[p] == 0) || (CPOwn[p] == 2) )
+                        {
+							hudmessageonactor_special(4000 + p, 10000 * 65536, -1, "Goal", p, abs(CPFakeStatus[p]));
+                        }
+                        else if((CPOwn[p] == 1) && (CPWho[p] == 2))
+                        {
+							hudmessageonactor_special(4000 + p, 10000 * 65536, -1, "Danger", p, abs(CPFakeStatus[p]));
+                        }
+                        else hudmessage(s:""; HUDMSG_PLAIN, 30 + p, CR_GRAY, 0.5, 0.6, 0);
+                    }
+                    else hudmessage(s:""; HUDMSG_PLAIN, 30 + p, CR_GRAY, 0.5, 0.6, 0);
+                }
+            }
+        }
+        else if(PlayerTeam() == 1)
+        {
+            for(p = 0; p < CPUsed; p++)
+            {
+                if(InAreaHeight(0, CPLoc[p][0] - CPLoc[p][2], CPLoc[p][0] + CPLoc[p][2], CPLoc[p][1] - CPLoc[p][2], CPLoc[p][1] + CPLoc[p][2], CPLoc[p][3], CPLoc[p][3] + CPLoc[p][4]))
+                {
+					hudmessage(s:""; HUDMSG_PLAIN, 30 + p, CR_GRAY, 0.5, 0.6, 0);
+                }
+                else
+                {
+                    checkPassed = true;
+                    for(i = 0; i < 5; i++)
+                    {
+                        if(!(CPReqRed[p][i] == -1))
+                        {
+                            if(!(CPOwn[CPReqRed[p][i]] == 2)) checkPassed = false;
+                        }
+                    }
+                    if(checkPassed)
+                    {
+                        if( (CPOwn[p] == 0) || (CPOwn[p] == 1) )
+                        {
+							hudmessageonactor_special(4000 + p, 10000 * 65536, -1, "Goal", p, abs(CPFakeStatus[p]));
+                        }
+                        else if((CPOwn[p] == 2) && (CPWho[p] == 1))
+                        {
+							hudmessageonactor_special(4000 + p, 10000 * 65536, -1, "Danger", p, abs(CPFakeStatus[p]));
+                        }
+                        else hudmessage(s:""; HUDMSG_PLAIN, 30 + p, CR_GRAY, 0.5, 0.6, 0);
+                    }
+                    else hudmessage(s:""; HUDMSG_PLAIN, 30 + p, CR_GRAY, 0.5, 0.6, 0);
+                }
+            }
+        }
+        
+        delay(1);
+    }
+}
+
+script 799 RESPAWN
+{
+    acs_executealways(793, 0, 0, 0, 0);
+    acs_executealways(794, 0, 0, 0, 0);
+    /*
+    int i = 0;
+    
+    delay(35);
+    
+    while(Alive[PlayerNumber()])
+    {
+        for(i = 0; i < 7; i++)
+        {
+            if(InArea(0, CPLoc[i][0] - CPLoc[i][2], CPLoc[i][0] + CPLoc[i][2], CPLoc[i][1] - CPLoc[i][2], CPLoc[i][1] + CPLoc[i][2]))
+            {
+                if(PlayerTeam() == 0)
+                {
+                    if(   ( (i == 3) && !((CPOwn[1] == 1) && (CPOwn[2] == 1)) )   ||   ( ((i == 4) || (i == 5)) && !(CPOwn[3] == 1) )   ||   ( (i == 6) && !((CPOwn[4] == 1) && (CPOwn[5] == 1)) )   )
+                    {
+                        hudmessage(s:"You do not own the required areas to capture this."; HUDMSG_PLAIN, 18, CR_ORANGE, 0.5, 0.6, 0.2);
+                    }
+                    else
+                    {
+                        if(CPOwn[i] == 0) hudmessage(i:abs(CPStatus[i]), s:"%"; HUDMSG_PLAIN, 18, CR_LIGHTBLUE, 0.5, 0.6, 0.2);
+                        else if(CPOwn[i] == 1) hudmessage(i:abs(CPStatus[i]), s:"%"; HUDMSG_PLAIN, 18, CR_BLUE, 0.5, 0.6, 0.2);
+                        else if(CPOwn[i] == 2) hudmessage(i:abs(CPStatus[i]), s:"%"; HUDMSG_PLAIN, 18, CR_BRICK, 0.5, 0.6, 0.2);
+                    }
+                }
+                else if(PlayerTeam() == 1)
+                {
+                    if(   ( (i == 3) && !((CPOwn[4] == 2) && (CPOwn[5] == 2)) )   ||   ( ((i == 1) || (i == 2)) && !(CPOwn[3] == 2) )   ||   ( (i == 0) && !((CPOwn[1] == 2) && (CPOwn[2] == 2)) )   )
+                    {
+                        hudmessage(s:"You do not own the required areas to capture this."; HUDMSG_PLAIN, 18, CR_ORANGE, 0.5, 0.6, 0.2);
+                    }
+                    else
+                    {
+                        if(CPOwn[i] == 0) hudmessage(i:abs(CPStatus[i]), s:"%"; HUDMSG_PLAIN, 18, CR_BRICK, 0.5, 0.6, 0.2);
+                        else if(CPOwn[i] == 1) hudmessage(i:abs(CPStatus[i]), s:"%"; HUDMSG_PLAIN, 18, CR_LIGHTBLUE, 0.5, 0.6, 0.2);
+                        else if(CPOwn[i] == 2) hudmessage(i:abs(CPStatus[i]), s:"%"; HUDMSG_PLAIN, 18, CR_RED, 0.5, 0.6, 0.2);
+                    }
+                }
+                else
+                {
+                    hudmessage(s:"GET ON A TEAM!"; HUDMSG_PLAIN, 18, CR_ORANGE, 0.5, 0.6, 0.2);
+                }
+            }
+        }
+        hudmessageonactor(801, 10000 * 65536, -1, "Center Point");
+        
+        delay(1);
+    }
+    */
+}
+
+function bool CP_RUN(void)
+{
+    int i = 0;
+    bool redOwnAll = true;
+    bool blueOwnAll = true;
+    
+    for(i = 0; i < CPUsed; i++)
+    {
+        runCapturePoint(i, false);
+        if(!(CPOwn[i] == 1)) blueOwnAll = false;
+        if(!(CPOwn[i] == 2)) redOwnAll = false;
+    }
+    
+    if(!((BlueScore() > GetCVar("PointLimit")) || (RedScore() > GetCVar("PointLimit"))))
+    {
+        if(redOwnAll) Team_GivePoints(1, GetCVar("PointLimit"), 1);
+        else if(blueOwnAll) Team_GivePoints(0, GetCVar("PointLimit"), 1);
+    }
+    
+    return true;
+}
+
+function bool runCapturePoint (int pointID, bool circle)
+{
+    int redTeam = 0;
+    int blueTeam = 0;
+    
+    bool checkPassed = false;
+    
+    int i = 0;
+    
+    if(circle)
+    {
+        for(i = 0; i < 31; i++)
+        {
+        if(PlayerInGame(i))
+        {
+            if(InAreaCircle(1000 + i, CPLoc[pointID][0], CPLoc[pointID][1], CPLoc[pointID][2]))
+            {
+                if(PTStatus[i] == 0)
+                {
+                    blueTeam += 1;
+                }
+                else if(PTStatus[i] == 1)
+                {
+                    redTeam += 1;
+                }
+            }
+        }
+        }
+    }
+    else
+    {
+        for(i = 0; i < 31; i++)
+        {
+        if(PlayerInGame(i))
+        {
+        if(InAreaHeight(1000 + i, CPLoc[pointID][0] - CPLoc[pointID][2], CPLoc[pointID][0] + CPLoc[pointID][2], CPLoc[pointID][1] - CPLoc[pointID][2], CPLoc[pointID][1] + CPLoc[pointID][2], CPLoc[pointID][3], CPLoc[pointID][3] + CPLoc[pointID][4]))
+        {
+            if(PTStatus[i] == 0)
+            {
+                blueTeam += 1;
+            }
+            else if(PTStatus[i] == 1)
+            {
+                redTeam += 1;
+            }
+        }
+        }
+        }
+    }
+    
+    if( GetTeamProperty(0, TPROP_NumPlayers) > GetTeamProperty(1, TPROP_NumPlayers) )
+    {
+        redTeam = (FixedMul( (redTeam << 16), FixedDiv( (GetTeamProperty(0, TPROP_NumPlayers) << 16), (GetTeamProperty(1, TPROP_NumPlayers) << 16) ) ) >> 16);
+        if( redTeam > GetTeamProperty(0, TPROP_NumPlayers) ) redTeam = GetTeamProperty(0, TPROP_NumPlayers);
+    }
+    else if( GetTeamProperty(1, TPROP_NumPlayers) > GetTeamProperty(0, TPROP_NumPlayers) )
+    {
+        blueTeam = (FixedMul( (blueTeam << 16), FixedDiv( (GetTeamProperty(1, TPROP_NumPlayers) << 16), (GetTeamProperty(0, TPROP_NumPlayers) << 16) ) ) >> 16);
+        if( blueTeam > GetTeamProperty(1, TPROP_NumPlayers) ) blueTeam = GetTeamProperty(1, TPROP_NumPlayers);
+    }    
+    
+    if(redTeam > blueTeam)
+    {
+        redTeam = redTeam - blueTeam;
+        blueTeam = 0;
+    }
+    else if(blueTeam > redTeam)
+    {
+        blueTeam = blueTeam - redTeam;
+        redTeam = 0;
+    }
+    
+    CPWho[pointID] = 0;
+    if(!((redTeam > 0) && (blueTeam > 0)))
+    {
+        if(redTeam > 0)
+        {
+            CPWho[pointID] = 2;
+            
+            checkPassed = true;
+            for(i = 0; i < 5; i++)
+            {
+                if(!(CPReqRed[pointID][i] == -1))
+                {
+                    if(!(CPOwn[CPReqRed[pointID][i]] == 2)) checkPassed = false;
+                }
+            }
+                    
+            if(checkPassed)
+            {
+                CPStatus[pointID] -= redTeam; //( ( FixedMul( (redTeam << 16), FixedDiv( (GetTeamProperty(1, TPROP_NumPlayers) << 16), (maxPlayers << 16) ) ) ) >> 16);
+                if(CPStatus[pointID] < -99)
+                {
+                    CPStatus[pointID] = -100;
+                    if(!(CPOwn[pointID] == 2)) changeCapturePoint(pointID, 2);
+                    CPOwn[pointID] = 2;
+                }
+                if((CPStatus[pointID] < 1) && (CPStatus[pointID] > -100) && !(CPOwn[pointID] == 2)) 
+                {
+                    if(!(CPOwn[pointID] == 0)) changeCapturePoint(pointID, 0);
+                    CPOwn[pointID] = 0;
+                }
+            }
+        }
+        else if(blueTeam > 0)
+        {
+            CPWho[pointID] = 1;
+            
+            checkPassed = true;
+            for(i = 0; i < 5; i++)
+            {
+                if(!(CPReqBlue[pointID][i] == -1))
+                {
+                    if(!(CPOwn[CPReqBlue[pointID][i]] == 1)) checkPassed = false;
+                }
+            }
+            
+            if(checkPassed)
+            {
+                CPStatus[pointID] += blueTeam; //( ( FixedMul( (blueTeam << 16), FixedDiv( (GetTeamProperty(1, TPROP_NumPlayers) << 16), (maxPlayers << 16) ) ) ) >> 16);
+                if(CPStatus[pointID] > 99)
+                {
+                    CPStatus[pointID] = 100;
+                    if(!(CPOwn[pointID] == 1)) changeCapturePoint(pointID, 1);
+                    CPOwn[pointID] = 1;
+                }
+                if((CPStatus[pointID] > -1) && (CPStatus[pointID] < 100) && !(CPOwn[pointID] == 1)) 
+                {
+                    if(!(CPOwn[pointID] == 0)) changeCapturePoint(pointID, 0);
+                    CPOwn[pointID] = 0;
+                }
+            }
+        }
+        else
+        {
+            if(CPOwn[pointID] == 0)
+            {
+                if(CPStatus[pointID] < 0)
+                {
+                    CPStatus[pointID] += 1;
+                    if(CPStatus[pointID] > 0) CPStatus[pointID] = 0;
+                }
+                if(CPStatus[pointID] > 0)
+                {
+                    CPStatus[pointID] -= 1;
+                    if(CPStatus[pointID] < 0) CPStatus[pointID] = 0;
+                }
+            }
+            else if(CPOwn[pointID] == 1)
+            {
+                if(CPStatus[pointID] < 100)
+                {
+                    CPStatus[pointID] += 1;
+                    if(CPStatus[pointID] > 100) CPStatus[pointID] = 100;
+                }
+            }
+            else if(CPOwn[pointID] == 2)
+            {
+                if(CPStatus[pointID] > -100)
+                {
+                    CPStatus[pointID] -= 1;
+                    if(CPStatus[pointID] < -100) CPStatus[pointID] = -100;
+                }
+            }
+        }
+    }
+    
+    return true;
+}
+
+script 803 OPEN
+{
+    int i = 0;
+    
+    while(true)
+    {
+		if( isHUB )
+		{
+			ConsoleCommand("set pointlimit 0");
+			terminate;
+		}
+		
+        if( ( (GetCVar("PointLimit") == 0) || (GetCVar("PointLimit") == 1) ) && (GetCVar("TimeLimit") > 0) ) ConsoleCommand(StrParam(s:"set pointlimit ",i:(CPUsed*GetCVar("TimeLimit")*30)));
+        
+        if( (GetCVar("TimeLimit") > 0) && (GetTeamProperty(0, TPROP_Score) < GetCVar("PointLimit")) && (GetTeamProperty(1, TPROP_Score) < GetCVar("PointLimit")) )
+        {        
+            for(i = 0; i < CPUsed; i++)
+            {
+                if(CPOwn[i] == 1) Team_GivePoints(0, 1, 0);
+                if(CPOwn[i] == 2) Team_GivePoints(1, 1, 0);
+            }
+        }
+        
+        delay(35);
+    }
+}
+
+function bool changeCapturePoint (int pointID, int team)
+{
+    int i = 0;
+    
+    for(i = 0; i < 25; i++)
+    {
+        if(!(CPChange[pointID][team][i][0] == -1))
+        {
+            if(CPChange[pointID][team][i][4] == 1)
+            {
+                ChangeFloor(CPChange[pointID][team][i][0], CPChange[pointID][team][i][3]);
+            }
+            else if(CPChange[pointID][team][i][4] == 2)
+            {
+                ChangeCeiling(CPChange[pointID][team][i][0], CPChange[pointID][team][i][3]);
+            }
+            else
+            {
+                SetLineTexture(CPChange[pointID][team][i][0], CPChange[pointID][team][i][1], CPChange[pointID][team][i][2], CPChange[pointID][team][i][3]);
+            }
+        }
+    }
+    
+    return true;
+}
+
+// InArea Functions - Players
+function bool InAreaCircle (int tag, int X, int y, int radius)
+{
+    bool value;
+    if((GetActorX(tag) > (x - radius)) && (GetActorX(tag) < (x + radius)))
+    {
+    if((GetActory(tag) < (y + sqrt( ((radius*radius)*65536) - ((GetActorX(tag) - x)*(GetActorX(tag) - x)) ) ) ) && (GetActory(tag) > (y - sqrt( ((radius*radius)*65536) - ((GetActorX(tag) - x)*(GetActorX(tag) - x)) ) ) ))
+    {
+        value = true;
+    }
+    }
+    else value = false;
+    return value;
+}
+
+function bool InAreaHeight (int tag, int lowX, int highX, int lowY, int highY, int lowZ, int highZ)
+{
+    bool value;
+    if((GetActorX(tag) < (highX*65536)) && (GetActorX(tag) > (lowX*65536)) && (GetActorY(tag) < (highY*65536)) && (GetActorY(tag) > (lowY*65536)) && (GetActorZ(tag) > (lowZ*65536)) && (GetActorZ(tag) < (highZ*65536)))
+    {
+        value = true;
+    }
+    else value = false;
+    return value;
+}
+
+function bool InArea (int tag, int lowX, int highX, int lowY, int highY)
+{
+    bool value;
+    if((GetActorX(tag) < (highX*65536)) && (GetActorX(tag) > (lowX*65536)) && (GetActorY(tag) < (highY*65536)) && (GetActorY(tag) > (lowY*65536)))
+    {
+        value = true;
+    }
+    else value = false;
+    return value;
+}
+
+function int abs (int x)
+{
+    if (x < 0)
+        return -x;
+
+    return x;
+}
+
+function void hudmessageonactor(int tid, int range, str sprite, str text, int color, int id)
+{
+	int dist, ang, vang, pitch, x, y;
+	int HUDX = 640;
+	int HUDY = 400;
+	int offset = 0;
+
+	if(sprite != -1)
+	{
+		SetFont(sprite);
+		text = "A";
+		offset = 0.1;
+	}
+
+	SetHudSize(HUDX, HUDY, 1);
+	x = GetActorX(tid) - GetActorX(0);
+	y = GetActorY(tid) - GetActorY(0); 
+
+	vang = VectorAngle(x,y);
+	ang = (vang - GetActorAngle(0) + 1.0) % 1.0;
+
+	if(((vang+0.125)%0.5) > 0.25) dist = FixedDiv(y, sin(vang));
+	else dist = FixedDiv(x, cos(vang));
+
+	if ((ang < 0.2 || ang > 0.8) && dist >> 16 < range)
+	{
+		pitch = VectorAngle(dist, GetActorZ(tid) - (GetActorZ(0) + 41.0));
+		pitch = (pitch + GetActorPitch(0) + 1.0) % 1.0;
+
+		x = HUDX/2 - ((HUDX/2) * sin(ang) / cos(ang));
+		y = HUDY/2 - ((HUDX/2) * sin(pitch) / cos(pitch));
+
+		HudMessage(s:text; HUDMSG_PLAIN, id, color, (x<<16)+offset, (y<<16)+offset, 0);
+	}
+	else
+	{
+		HudMessage(s:""; HUDMSG_PLAIN, id, color, 0, 0, 0);
+	}
+}
+
+//function void hudmessageonactor_special(int tid, int range, str sprite, str text, int color, int id, int percentage)
+function void hudmessageonactor_special(int tid, int range, str sprite, str text, int pointID, int percentage)
+{
+	int dist, ang, vang, pitch, x, y;
+	int HUDX = 640;
+	int HUDY = 400;
+	int offset = 0;
+
+	if(sprite != -1)
+	{
+		SetFont(sprite);
+		text = "A";
+		offset = 0.1;
+	}
+
+	SetHudSize(HUDX, HUDY, 1);
+	x = GetActorX(tid) - GetActorX(0);
+	y = GetActorY(tid) - GetActorY(0); 
+
+	vang = VectorAngle(x,y);
+	ang = (vang - GetActorAngle(0) + 1.0) % 1.0;
+
+	if(((vang+0.125)%0.5) > 0.25) dist = FixedDiv(y, sin(vang));
+	else dist = FixedDiv(x, cos(vang));
+	
+	SetFont("CPFNTNEW");
+	
+	str color;
+	if(CPOwn[pointID] == 0)
+	{
+		if(CPFakeStatus[pointID] == -100) color = "CPRed";
+		else if( (CPFakeStatus[pointID] > -100) && (CPFakeStatus[pointID] < -66) ) color = "CPHiRed";
+		else if( (CPFakeStatus[pointID] > -67) && (CPFakeStatus[pointID] < -33) ) color = "CPMedRed";
+		else if( (CPFakeStatus[pointID] > -34) && (CPFakeStatus[pointID] < 0) ) color = "CPLowRed";
+		else if(CPFakeStatus[pointID] == 0) color = "CPGray";
+		else if( (CPFakeStatus[pointID] < 34) && (CPFakeStatus[pointID] > 0) ) color = "CPLowBlue";
+		else if( (CPFakeStatus[pointID] < 67) && (CPFakeStatus[pointID] > 33) ) color = "CPMedBlue";
+		else if( (CPFakeStatus[pointID] < 100) && (CPFakeStatus[pointID] > 66) ) color = "CPHiBlue";
+		else if(CPFakeStatus[pointID] == 100) color = "CPBlue";
+	}
+	else if(CPOwn[pointID] == 1)
+	{
+		if(PlayerTeam() == 0)
+		{
+			if(CPWho[pointID] == 2) color = "CPOrange";
+			else if( (CPFakeStatus[pointID] < 34) && (CPFakeStatus[pointID] > 0) ) color = "CPLowBlue";
+			else if( (CPFakeStatus[pointID] < 67) && (CPFakeStatus[pointID] > 33) ) color = "CPMedBlue";
+			else if( (CPFakeStatus[pointID] < 100) && (CPFakeStatus[pointID] > 66) ) color = "CPHiBlue";
+			else if(CPFakeStatus[pointID] == 100) color = "CPBlue";
+		}
+		else if(PlayerTeam() == 1)
+		{
+			if( (CPFakeStatus[pointID] < 34) && (CPFakeStatus[pointID] > 0) ) color = "CPLowBlue";
+			else if( (CPFakeStatus[pointID] < 67) && (CPFakeStatus[pointID] > 33) ) color = "CPMedBlue";
+			else if( (CPFakeStatus[pointID] < 100) && (CPFakeStatus[pointID] > 66) ) color = "CPHiBlue";
+			else if(CPFakeStatus[pointID] == 100) color = "CPBlue";
+		}
+	}
+	else if(CPOwn[pointID] == 2)
+	{
+		if(PlayerTeam() == 1)
+		{
+			if(CPWho[pointID] == 1) color = "CPOrange";
+			else if( (CPFakeStatus[pointID] > -34) && (CPFakeStatus[pointID] < 0) ) color = "CPLowRed";
+			else if( (CPFakeStatus[pointID] > -67) && (CPFakeStatus[pointID] < -33) ) color = "CPMedRed";
+			else if( (CPFakeStatus[pointID] > -100) && (CPFakeStatus[pointID] < -66) ) color = "CPHiRed";
+			else if(CPFakeStatus[pointID] == -100) color = "CPRed";
+		}
+		else if(PlayerTeam() == 0)
+		{
+			if( (CPFakeStatus[pointID] > -34) && (CPFakeStatus[pointID] < 0) ) color = "CPLowRed";
+			else if( (CPFakeStatus[pointID] > -67) && (CPFakeStatus[pointID] < -33) ) color = "CPMedRed";
+			else if( (CPFakeStatus[pointID] > -100) && (CPFakeStatus[pointID] < -66) ) color = "CPHiRed";
+			else if(CPFakeStatus[pointID] == -100) color = "CPRed";
+		}
+	}	
+
+	if ((ang < 0.1 || ang > 0.9) && dist >> 16 < range)
+	{
+		pitch = VectorAngle(dist, GetActorZ(tid) - (GetActorZ(0) + 41.0));
+		pitch = (pitch + GetActorPitch(0) + 1.0) % 1.0;
+
+		x = HUDX/2 - ((HUDX/2) * sin(ang) / cos(ang));
+		y = HUDY/2 - ((HUDX/2) * sin(pitch) / cos(pitch));
+
+		if( GetCVar("CPS_HUD_3DPOINTSTATUS") == 1 )
+		{
+			HudMessage(s:text, s:"\n", i:percentage, s:"%"; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 30+pointID, color, (x<<16)+offset, (y<<16)+offset, 0);
+		}
+		else if( GetCVar("CPS_HUD_3DPOINTSTATUS") == 2 )
+		{
+			SetFont("OBJECTFONT");
+			HudMessage(s:"I"; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 30+pointID, color, (x<<16)+offset, (y<<16)+offset, 0);
+		}
+		else HudMessage(s:""; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 30+pointID, color, 0, 0, 0);
+	}
+	else if ( ang >= 0.1 && ang < 0.5 )
+	{
+		pitch = VectorAngle(dist, GetActorZ(tid) - (GetActorZ(0) + 41.0));
+		pitch = (pitch + GetActorPitch(0) + 1.0) % 1.0;
+		
+		y = HUDY/2 - ((HUDY/2) * sin(pitch) / cos(pitch));
+		
+		SetFont("OBJECTFONT");
+		if( GetCVar("CPS_HUD_3DPOINTSTATUS") == 1 )
+		{
+			HudMessage(s:"< ", i:percentage, s:"%"; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 30+pointID, color, 5.1, (y<<16)+offset, 0);
+		}
+		else if( GetCVar("CPS_HUD_3DPOINTSTATUS") == 2 )
+		{
+			HudMessage(s:"< A"; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 30+pointID, color, 5.1, (y<<16)+offset, 0);
+		}
+		else HudMessage(s:""; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 30+pointID, color, 0, 0, 0);
+	}
+	else if ( ang <= 0.9 && ang > 0.5 )
+	{
+		pitch = VectorAngle(dist, GetActorZ(tid) - (GetActorZ(0) + 41.0));
+		pitch = (pitch + GetActorPitch(0) + 1.0) % 1.0;
+		
+		y = HUDY/2 - ((HUDY/2) * sin(pitch) / cos(pitch));
+		
+		SetFont("OBJECTFONT");
+		if( GetCVar("CPS_HUD_3DPOINTSTATUS") == 1 )
+		{
+			HudMessage(i:percentage, s:"% >"; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 30+pointID, color, 635.1, (y<<16)+offset, 0);
+		}
+		else if( GetCVar("CPS_HUD_3DPOINTSTATUS") == 2 )
+		{
+			HudMessage(s:"A >"; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 30+pointID, color, 635.1, (y<<16)+offset, 0);
+		}
+		else HudMessage(s:""; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 30+pointID, color, 0, 0, 0);
+	}
+	else
+	{
+		HudMessage(s:""; HUDMSG_PLAIN | HUDMSG_COLORSTRING, 30+pointID, color, 0, 0, 0);
+	}
+	SetFont("SMALLFONT");
+}
+
+function bool CounterOnLineDef (int lid, int digits, int number, str texture, int texnumsize)
+{
+  if( number > (ToPower(10,digits) - 1) )
+  {
+    return false;
+  }
+  else
+  {
+    int varyNum = number;
+    for(int i = 0; i < digits; i++)
+    {
+      int thisDigit = (varyNum / ToPower(10,((digits-i)-1)));
+      varyNum = varyNum - (thisDigit * ToPower(10,((digits-i)-1)));
+      SetLineTexture(lid+i, SIDE_FRONT, TEXTURE_MIDDLE, texture);
+      Line_SetTextureOffset(lid+i, ((thisDigit*texnumsize) << 16), NO_CHANGE, SIDE_FRONT, TEXFLAG_MIDDLE);
+    }
+  }
+  return true;
+}
+
+function int ToPower (int originalNum, int power)
+{
+    int tNum = originalNum;
+    for(int i = 0; i < (power-1); i++)
+    {
+        tNum = tNum * originalNum;
+    }
+    if(power == 0) tNum = 1;
+    return tNum;
+}
+      
