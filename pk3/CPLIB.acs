@@ -429,7 +429,7 @@ function bool addHUBPortal (str imageName, str lumpName, str mapName, str nameIm
 	CPHUBPortals[CPHUBPortalsUsed][2] = lumpName;
 	CPHUBPortals[CPHUBPortalsUsed][3] = mapName;
 	
-	SetLineSpecial(CPHUBPortals[CPHUBPortalsUsed][0], ACS_Execute, 806, 0, CPHUBPortalsUsed);
+	SetLineSpecial(CPHUBPortals[CPHUBPortalsUsed][0], ACS_ExecuteAlways, 806, 0, CPHUBPortalsUsed);
 	SetLineTexture(CPHUBPortals[CPHUBPortalsUsed][0], SIDE_FRONT, TEXTURE_MIDDLE, imageName);
 	SetLineTexture(CPHUBPortals[CPHUBPortalsUsed][0], SIDE_BACK, TEXTURE_MIDDLE, imageName);
 	SetLineTexture(CPHUBPortals[CPHUBPortalsUsed][4], SIDE_FRONT, TEXTURE_MIDDLE, nameImageName);
