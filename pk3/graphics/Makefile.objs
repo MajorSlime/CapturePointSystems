@@ -1,0 +1,4 @@
+GRAPHICS_TOP := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
+
+pk3-y += $(addprefix CPFNTNEW/,$(notdir $(wildcard $(GRAPHICS_TOP)/CPFNTNEW/CPSFN*.lmp)))
+pk3-y += $(addprefix CPFONTSM/,$(notdir $(wildcard $(GRAPHICS_TOP)/CPFONTSM/CPFSM*.png)))

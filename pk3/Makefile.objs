@@ -1,0 +1,14 @@
+acs-y += acs/
+pk3-y += graphics/
+pk3-y += maps/
+pk3-y += music/
+pk3-y += patches/
+pk3-y += sprites/
+pk3-y += CVARINFO.txt
+pk3-y += DECORATE.txt
+pk3-y += FONTDEFS.txt
+pk3-y += MAPINFO.txt
+pk3-y += MUSICCREDIT.txt
+pk3-y += TEXTCOLO.txt
+pk3-y += TEXTURECREDIT.txt
+pk3-y += TEXTURES.txt
