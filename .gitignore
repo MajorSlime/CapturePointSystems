@@ -2,3 +2,5 @@ build/*
 *.pk3
 *.bak
 config.mak
+*.dbs
+*.wad.backup*
