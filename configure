@@ -1,0 +1,73 @@
+#!/bin/bash
+
+SYSTEM_V2=n
+HUB_DOOM=y
+
+help () {
+  echo "Usage: ./configure [args]"
+  echo "  --enable-system-v2"
+  echo "  --disable-system-v2"
+  echo "      Enable or disable V2 of the CapturePoints system, which uses"
+  echo "      thing-based points and BCS scripts."
+  echo "  --enable-hub=HUB"
+  echo "  --disable-hub=HUB"
+  echo "      Build in a specified HUB map, which can be used by players to"
+  echo "      select maps to play next. Different HUB maps support different"
+  echo "      IWADs, such as Doom or Chex based HUBs. Current valid HUB"
+  echo "      options are as follows:"
+  echo "       - DOOM"
+}
+
+set_hub () {
+  local hub="${1,,}"
+  local val="$2"
+  case "$hub" in
+    doom)
+      HUB_DOOM="$val"
+      ;;
+    *)
+      echo "Unknown HUB type '$hub'" 1>&2
+      help
+      exit 1
+      ;;
+  esac
+}
+
+for opt in $@; do
+  case "$opt" in
+    -h|--help)
+      help
+      exit 0
+      ;;
+    --enable-system-v2)
+      SYSTEM_V2=y
+      ;;
+    --disable-system-v2)
+      SYSTEM_V2=n
+      ;;
+    --enable-hub=*)
+      hub=${opt#"--enable-hub="}
+      set_hub "$hub" y
+      ;;
+    --disable-hub=*)
+      hub=${opt#"--disable-hub="}
+      set_hub "$hub" n
+      ;;
+    *)
+      echo "Unknown argument '$opt'" 1>&2
+      help
+      exit 1
+      ;;
+  esac
+done
+
+echo "========================================"
+echo " SYSTEM_V2:  ${SYSTEM_V2}"
+echo " HUBS:"
+echo "   DOOM:     ${HUB_DOOM}"
+echo "========================================"
+
+MAKE_CONF="config.mak"
+echo "# GENERATED MAKE CONFIG - DO NOT EDIT" > ${MAKE_CONF}
+echo "SYSTEM_V2=${SYSTEM_V2}" >> ${MAKE_CONF}
+echo "HUB_DOOM=${HUB_DOOM}" >> ${MAKE_CONF}

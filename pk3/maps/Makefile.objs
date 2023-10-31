@@ -1,1 +1,1 @@
-pk3-y += HUB_DOOM.wad
+pk3-$(HUB_DOOM) += HUB_DOOM.wad

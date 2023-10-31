@@ -1,5 +1,11 @@
 # CapturePointSystems Makefile
 
+ifeq ($(wildcard config.mak),)
+$(error Missing 'config.mak'; please run ./configure first)
+endif
+
+include config.mak
+
 ZIP ?= zip
 ACC ?= acc
 BCC ?= bcc
@@ -38,15 +44,19 @@ $(BUILD_DIR)/.check-req-bcc:
 	$(if $(BCC_FULLPATH),,$(error "Missing requirement; please install `bcc` - can be found at https://github.com/zeta-group/zt-bcc"))
 	$(call quiet-command,touch $@,,)
 
-$(BUILD_DIR)/pk3/acs/%.o: $(SRC_PATH)/pk3/acs/%.acs $(BUILD_DIR)/.check-req-acc
+$(BUILD_DIR)/.check-config: config.mak
+	$(call quiet-command,rm -rf $(BUILD_DIR)/pk3 && mkdir -p $(BUILD_DIR)/pk3,"MKDIR","$@")
+	$(call quiet-command,touch $@,,)
+
+$(BUILD_DIR)/pk3/acs/%.o: $(SRC_PATH)/pk3/acs/%.acs $(BUILD_DIR)/.check-req-acc $(BUILD_DIR)/.check-config
 	$(call quiet-command,mkdir -p $(dir $@),,)
 	$(call quiet-command,$(ACC) $(ACC_FLAGS) $< $@,"ACC","$@")
 
-$(BUILD_DIR)/pk3/acs/%.o: $(SRC_PATH)/pk3/acs/%.bcs $(BUILD_DIR)/.check-req-bcc
+$(BUILD_DIR)/pk3/acs/%.o: $(SRC_PATH)/pk3/acs/%.bcs $(BUILD_DIR)/.check-req-bcc $(BUILD_DIR)/.check-config
 	$(call quiet-command,mkdir -p $(dir $@),,)
 	$(call quiet-command,$(BCC) $(BCC_FLAGS) $< $@,"BCC","$@")
 
-$(BUILD_DIR)/pk3/%: $(SRC_PATH)/pk3/%
+$(BUILD_DIR)/pk3/%: $(SRC_PATH)/pk3/% $(BUILD_DIR)/.check-config
 	$(call quiet-command,mkdir -p $(dir $@),,)
 	$(call quiet-command,cp $< $@,"CP","$@")
 
@@ -61,3 +71,4 @@ clean:
 	rm -rf $(BUILD_DIR)/pk3
 	rm -f $(BUILD_DIR)/$(PK3_NAME)
 	rm -f $(BUILD_DIR)/.check-req-*
+	rm -f $(BUILD_DIR)/.check-config

@@ -1,1 +1,1 @@
-pk3-y += CIVWAR.xm
+pk3-$(HUB_DOOM) += CIVWAR.xm
